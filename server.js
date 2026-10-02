@@ -7,19 +7,37 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 const MAX_PLAYERS = 5;
-const N_BTN = 32;            // ボタン総数 (4面 × 8個)
 const GAME_TIME = 5 * 60e3;  // 制限時間 5分
 const WALL_NAMES = ['北', '東', '南', '西'];
 
-// ボタンの内訳 (合計32): 出口1 / ヒント6 / 凍結6 / 暗闇4 / ワープ4 / ハズレ11
-const TYPE_POOL = [
-  ...Array(1).fill('exit'),
-  ...Array(6).fill('hint'),
-  ...Array(6).fill('freeze'),
-  ...Array(4).fill('dark'),
-  ...Array(4).fill('warp'),
-  ...Array(11).fill('none'),
-];
+// ボタン数の段階 (1面あたり cols × rows、4面なので合計 = cols*rows*4)
+const SIZES = {
+  s:  { cols: 4,  rows: 2 },   //  32個
+  m:  { cols: 6,  rows: 3 },   //  72個
+  l:  { cols: 8,  rows: 4 },   // 128個
+  xl: { cols: 10, rows: 5 },   // 200個
+};
+
+function makeLevel(key) {
+  const { cols, rows } = SIZES[key] || SIZES.s;
+  const per = cols * rows, n = per * 4;
+  const sx = cols <= 4 ? 4 : 2.8;                       // ボタンの横間隔
+  const half = Math.max(10, cols * sx / 2 + 1.2);       // 部屋の半幅
+  return { cols, rows, per, n, sx, half };
+}
+
+// 出口1 + ヒント19% + 凍結19% + 暗闇12.5% + ワープ12.5% + 残りハズレ
+function makePool(n) {
+  const h = Math.round(n * 0.19), f = Math.round(n * 0.19);
+  const d = Math.round(n * 0.125), w = Math.round(n * 0.125);
+  const none = n - 1 - h - f - d - w;
+  return [
+    'exit',
+    ...Array(h).fill('hint'), ...Array(f).fill('freeze'),
+    ...Array(d).fill('dark'), ...Array(w).fill('warp'),
+    ...Array(none).fill('none'),
+  ];
+}
 
 // ---------- HTTP (静的配信) ----------
 const server = http.createServer((req, res) => {
@@ -55,7 +73,7 @@ const genCode = () => {
 function newRoom(code) {
   return {
     code, phase: 'lobby', host: null, players: new Map(),
-    types: [], exitId: -1, pressed: new Set(), hintsGiven: new Set(),
+    level: null, types: [], exitId: -1, pressed: new Set(), hintsGiven: new Set(),
     timer: null, ticker: null, endsAt: 0,
   };
 }
@@ -68,9 +86,10 @@ function lobbyInfo(room) {
 }
 
 // ---------- ゲーム進行 ----------
-function startGame(room) {
+function startGame(room, sizeKey) {
   room.phase = 'playing';
-  room.types = shuffle([...TYPE_POOL]);
+  room.level = makeLevel(sizeKey);
+  room.types = shuffle(makePool(room.level.n));
   room.exitId = room.types.indexOf('exit');
   room.pressed = new Set();
   room.hintsGiven = new Set();
@@ -84,7 +103,8 @@ function startGame(room) {
     p.frozenUntil = 0;
     spawns[p.id] = [p.x, p.z];
   });
-  bcast(room, { t: 'start', remain: GAME_TIME, spawns, n: N_BTN });
+  const L = room.level;
+  bcast(room, { t: 'start', remain: GAME_TIME, spawns, n: L.n, cols: L.cols, rows: L.rows, half: L.half, sx: L.sx });
 
   room.timer = setTimeout(() => endGame(room, null), GAME_TIME);
   room.ticker = setInterval(() => {
@@ -107,16 +127,30 @@ function endGame(room, winner) {
 
 // 出口について本当のことだけを言うヒントを作る
 function genHint(room) {
-  const e = room.exitId;
-  const w = Math.floor(e / 8), k = e % 8, c = k % 4, r = Math.floor(k / 4);
+  const { cols, rows, per, n } = room.level;
+  const e = room.exitId, num = e + 1;
+  const w = Math.floor(e / per), k = e % per, c = k % cols, r = Math.floor(k / cols);
+  const pick = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1));
   const cands = [];
   for (let x = 0; x < 4; x++) if (x !== w) cands.push(`出口は【${WALL_NAMES[x]}の壁】にはない`);
   cands.push(`出口は【${WALL_NAMES[w]}の壁】か【${WALL_NAMES[(w + 2) % 4]}の壁】のどちらかにある`);
-  cands.push(`出口は壁の【${r === 0 ? '下段' : '上段'}】にある`);
-  cands.push(`出口は壁を正面から見て【${c < 2 ? '左半分' : '右半分'}】にある`);
-  cands.push(`出口の番号は【${(e + 1) % 2 === 0 ? '偶数' : '奇数'}】`);
-  cands.push(`出口の番号は【${e + 1 <= 16 ? '16以下' : '17以上'}】`);
-  cands.push(`出口の番号は【${(e + 1) % 3 === 0 ? '3の倍数' : '3の倍数ではない'}】`);
+  // 段 (下から / 上から)
+  if (r + 1 <= rows - 1) cands.push(`出口は壁の【下から${pick(r + 1, rows - 1)}段目以内】にある`);
+  const tr = rows - 1 - r;
+  if (tr + 1 <= rows - 1) cands.push(`出口は壁の【上から${pick(tr + 1, rows - 1)}段目以内】にある`);
+  // 列 (壁を正面から見て 左から / 右から)
+  if (c + 1 <= cols - 1) cands.push(`出口は壁を正面から見て【左から${pick(c + 1, cols - 1)}列目以内】にある`);
+  const tc = cols - 1 - c;
+  if (tc + 1 <= cols - 1) cands.push(`出口は壁を正面から見て【右から${pick(tc + 1, cols - 1)}列目以内】にある`);
+  // 番号
+  cands.push(`出口の番号は【${num % 2 === 0 ? '偶数' : '奇数'}】`);
+  cands.push(`出口の番号は【${num % 3 === 0 ? '3の倍数' : '3の倍数ではない'}】`);
+  const half = Math.floor(n / 2);
+  cands.push(`出口の番号は【${num <= half ? half + '以下' : (half + 1) + '以上'}】`);
+  const span = Math.ceil(n / 4);
+  const lo = Math.max(1, num - pick(0, span)), hi = Math.min(n, lo + span);
+  cands.push(`出口の番号は【${lo}〜${hi}番】の間にある`);
+
   const fresh = cands.filter(h => !room.hintsGiven.has(h));
   const pool = fresh.length ? fresh : cands;
   const h = pool[Math.floor(Math.random() * pool.length)];
@@ -126,7 +160,7 @@ function genHint(room) {
 
 function handlePress(room, p, id) {
   if (room.phase !== 'playing') return;
-  if (!Number.isInteger(id) || id < 0 || id >= N_BTN) return;
+  if (!Number.isInteger(id) || id < 0 || id >= room.level.n) return;
   if (room.pressed.has(id)) return;
   const now = Date.now();
   if (p.frozenUntil > now) return;
@@ -141,7 +175,7 @@ function handlePress(room, p, id) {
     case 'freeze': out.dur = 5000; p.frozenUntil = now + 5000; out.text = '床が凍りついた! 5秒間動けない'; break;
     case 'dark': out.dur = 6000; out.text = '照明が落ちた! 6秒間なにも見えない'; break;
     case 'warp': {
-      p.x = rand(-8, 8); p.z = rand(-8, 8);
+      const R = room.level.half - 2; p.x = rand(-R, R); p.z = rand(-R, R);
       out.to = [p.x, p.z]; out.text = '足元が光り、どこかへワープした!'; break;
     }
     default: out.text = '……なにも起こらなかった';
@@ -197,14 +231,15 @@ wss.on('connection', (ws) => {
     if (!p) return;
     const room = p.room;
 
-    if (m.t === 'start' && room.host === p.id && room.phase === 'lobby') startGame(room);
+    if (m.t === 'start' && room.host === p.id && room.phase === 'lobby') startGame(room, m.size);
     else if (m.t === 'again' && room.host === p.id && room.phase === 'ended') {
       room.phase = 'lobby'; bcast(room, lobbyInfo(room));
     }
     else if (m.t === 'move' && room.phase === 'playing') {
       if (Number.isFinite(m.x) && Number.isFinite(m.z)) {
-        p.x = Math.max(-9.5, Math.min(9.5, m.x));
-        p.z = Math.max(-9.5, Math.min(9.5, m.z));
+        const lim = (room.level ? room.level.half : 10) - 0.5;
+        p.x = Math.max(-lim, Math.min(lim, m.x));
+        p.z = Math.max(-lim, Math.min(lim, m.z));
         p.ry = Number(m.ry) || 0;
       }
     }

@@ -12,8 +12,9 @@
   .card{background:#171b2b;border:1px solid #2d3555;border-radius:14px;padding:28px 32px;width:min(420px,92vw);box-shadow:0 10px 40px #000a}
   h1{margin:0 0 6px;font-size:26px;letter-spacing:.05em}
   .sub{margin:0 0 18px;color:#9aa4cc;font-size:13px;line-height:1.6}
+  select{padding:10px 12px;border-radius:8px;border:1px solid #3a4470;background:#0f1220;color:#fff;font-size:16px}
   label{display:block;font-size:12px;color:#9aa4cc;margin:12px 0 4px}
-  input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #3a4470;background:#0f1220;color:#fff;font-size:16px}
+  input,select{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #3a4470;background:#0f1220;color:#fff;font-size:16px}
   button.big{margin-top:18px;width:100%;padding:12px;border:0;border-radius:10px;background:#ff5c7a;color:#fff;font-size:17px;font-weight:700;cursor:pointer}
   button.big:hover{background:#ff7a93}
   button.big:disabled{background:#444b6b;cursor:default}
@@ -66,6 +67,15 @@
     <p class="sub">このコードを友達に伝えてください</p>
     <div class="code" id="lobbyCode">----</div>
     <ul id="plist"></ul>
+    <div id="sizeBox">
+      <label>ボタンの数(ホストが選択)</label>
+      <select id="size">
+        <option value="s">小:32個</option>
+        <option value="m">中:72個</option>
+        <option value="l">大:128個</option>
+        <option value="xl">特大:200個</option>
+      </select>
+    </div>
     <button class="big" id="startBtn">ゲーム開始</button>
     <p class="sub" id="waitMsg" style="margin-top:12px;text-align:center"></p>
     <p class="sub"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 / マウス 視点 / クリック ボタンを押す</p>
@@ -91,7 +101,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-const N_BTN = 32, ROOM = 10;
+const SY = 2.3;   // ボタンの縦間隔
 const WALL_NAMES = ['北', '東', '南', '西'];
 const SLOT_COLORS = ['#ff5252', '#40c4ff', '#69f0ae', '#ffd740', '#e040fb'];
 const MARK = { exit: '🚪', hint: '💡', freeze: '❄', dark: '🌑', warp: '🌀', none: '・' };
@@ -122,33 +132,18 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 scene.add(new THREE.AmbientLight(0x9098b8, 0.75));
-const lamp = new THREE.PointLight(0xfff2dd, 0.9, 40); lamp.position.set(0, 5.5, 0); scene.add(lamp);
-[[-7, 3, -7], [7, 3, -7], [-7, 3, 7], [7, 3, 7]].forEach(p => {
-  const l = new THREE.PointLight(0xaabbff, 0.35, 18); l.position.set(...p); scene.add(l);
-});
 
-// 部屋 (4面の壁をそれぞれ違う色に)
-function floorTexture() {
+// ---------- 部屋とボタン (ボタン数に応じて作り直す) ----------
+function floorTexture(half) {
   const c = document.createElement('canvas'); c.width = c.height = 256;
   const g = c.getContext('2d');
   for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
     g.fillStyle = (x + y) % 2 ? '#2a2f45' : '#20243a'; g.fillRect(x * 32, y * 32, 32, 32);
   }
   const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(5, 5);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(half / 2, half / 2);
   return t;
 }
-const mat = c => new THREE.MeshStandardMaterial({ color: c, side: THREE.BackSide, roughness: .9 });
-// BoxGeometry面順: +x(東), -x(西), +y(天井), -y(床), +z(南), -z(北)
-const roomMats = [
-  mat(0x4a3a5c), mat(0x3a5c4a), mat(0x1c2030),
-  new THREE.MeshStandardMaterial({ map: floorTexture(), side: THREE.BackSide }),
-  mat(0x5c4a3a), mat(0x3a4a5c),
-];
-const roomMesh = new THREE.Mesh(new THREE.BoxGeometry(ROOM * 2, 6, ROOM * 2), roomMats);
-roomMesh.position.y = 3; scene.add(roomMesh);
-
-// 壁の方角プレート
 function textTexture(text, w, h, font, color = '#fff', bg = null) {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const g = c.getContext('2d');
@@ -159,69 +154,98 @@ function textTexture(text, w, h, font, color = '#fff', bg = null) {
 }
 const WALL_N = [[0, 0, 1], [-1, 0, 0], [0, 0, -1], [1, 0, 0]];   // 各壁の内向き法線
 const WALL_ROT = [0, -Math.PI / 2, Math.PI, Math.PI / 2];
-for (let w = 0; w < 4; w++) {
-  const n = WALL_N[w];
-  const { t } = textTexture(WALL_NAMES[w], 256, 256, 'bold 190px sans-serif', '#ffffffcc');
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6),
-    new THREE.MeshBasicMaterial({ map: t, transparent: true }));
-  m.position.set(-n[0] * (ROOM - 0.02), 5.1, -n[2] * (ROOM - 0.02));
-  m.rotation.y = WALL_ROT[w];
-  scene.add(m);
-}
+const wallMat = c => new THREE.MeshStandardMaterial({ color: c, side: THREE.BackSide, roughness: .9 });
 
-// ---------- ボタン ----------
-const btns = [];
-const btnMeshes = [];
-for (let i = 0; i < N_BTN; i++) {
-  const w = Math.floor(i / 8), k = i % 8, c = k % 4, r = Math.floor(k / 4);
-  const n = WALL_N[w];
-  const g = new THREE.Group();
-  g.position.set(-n[0] * ROOM, 0, -n[2] * ROOM);
-  g.rotation.y = WALL_ROT[w];
-  g.translateX(-6 + c * 4);                // 壁を正面から見て左→右
-  g.position.y = 1.7 + r * 2.3;
+let level = { cols: 4, rows: 2, per: 8, n: 32, half: 10, H: 6, sx: 4 };
+let levelGroup = null;
+let btns = [], btnMeshes = [];
 
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 0.15),
-    new THREE.MeshStandardMaterial({ color: 0x15171f, roughness: .5, metalness: .4 }));
-  plate.position.z = 0.075; g.add(plate);
+function buildLevel(cols, rows, half, sx) {
+  if (levelGroup) {
+    scene.remove(levelGroup);
+    levelGroup.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose && o.material.dispose(); }
+    });
+  }
+  const per = cols * rows, n = per * 4;
+  const H = Math.max(6, 1.7 + (rows - 1) * SY + 2.8);
+  level = { cols, rows, per, n, half, H, sx };
+  levelGroup = new THREE.Group();
+  btns = []; btnMeshes = [];
 
-  const col = new THREE.Color().setHSL(((i * 37) % 360) / 360, 0.85, 0.5);
-  const cg = new THREE.CylinderGeometry(0.5, 0.5, 0.3, 28); cg.rotateX(Math.PI / 2);
-  const bm = new THREE.Mesh(cg, new THREE.MeshStandardMaterial({
-    color: col, emissive: col, emissiveIntensity: 0.35, roughness: .3 }));
-  bm.position.z = 0.3; bm.userData.id = i; g.add(bm);
+  // 部屋 (BoxGeometry面順: +x東, -x西, +y天井, -y床, +z南, -z北)
+  const mats = [
+    wallMat(0x4a3a5c), wallMat(0x3a5c4a), wallMat(0x1c2030),
+    new THREE.MeshStandardMaterial({ map: floorTexture(half), side: THREE.BackSide }),
+    wallMat(0x5c4a3a), wallMat(0x3a4a5c),
+  ];
+  const room = new THREE.Mesh(new THREE.BoxGeometry(half * 2, H, half * 2), mats);
+  room.position.y = H / 2; levelGroup.add(room);
 
-  const lab = textTexture(String(i + 1), 256, 100, 'bold 70px sans-serif', '#fff', '#111');
-  const lm = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.43), new THREE.MeshBasicMaterial({ map: lab.t }));
-  lm.position.set(0, -1.05, 0.02); g.add(lm);
+  // ライト
+  const lamp = new THREE.PointLight(0xfff2dd, 0.9, half * 4); lamp.position.set(0, H - 0.5, 0); levelGroup.add(lamp);
+  [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([a, b]) => {
+    const l = new THREE.PointLight(0xaabbff, 0.4, half * 2);
+    l.position.set(a * half * 0.7, H / 2, b * half * 0.7); levelGroup.add(l);
+  });
 
-  scene.add(g);
-  btns.push({ i, mesh: bm, lab, color: col, pressed: false });
-  btnMeshes.push(bm);
+  // 壁の方角プレート
+  for (let w = 0; w < 4; w++) {
+    const nrm = WALL_N[w];
+    const { t } = textTexture(WALL_NAMES[w], 256, 256, 'bold 190px sans-serif', '#ffffffcc');
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6),
+      new THREE.MeshBasicMaterial({ map: t, transparent: true }));
+    m.position.set(-nrm[0] * (half - 0.02), H - 0.9, -nrm[2] * (half - 0.02));
+    m.rotation.y = WALL_ROT[w];
+    levelGroup.add(m);
+  }
+
+  // ボタン
+  for (let i = 0; i < n; i++) {
+    const w = Math.floor(i / per), k = i % per, c = k % cols, r = Math.floor(k / cols);
+    const nrm = WALL_N[w];
+    const g = new THREE.Group();
+    g.position.set(-nrm[0] * half, 0, -nrm[2] * half);
+    g.rotation.y = WALL_ROT[w];
+    g.translateX((c - (cols - 1) / 2) * sx);    // 壁を正面から見て左→右
+    g.position.y = 1.7 + r * SY;
+
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 0.15),
+      new THREE.MeshStandardMaterial({ color: 0x15171f, roughness: .5, metalness: .4 }));
+    plate.position.z = 0.075; g.add(plate);
+
+    const col = new THREE.Color().setHSL(((i * 37) % 360) / 360, 0.85, 0.5);
+    const cg = new THREE.CylinderGeometry(0.5, 0.5, 0.3, 24); cg.rotateX(Math.PI / 2);
+    const bm = new THREE.Mesh(cg, new THREE.MeshStandardMaterial({
+      color: col, emissive: col, emissiveIntensity: 0.35, roughness: .3 }));
+    bm.position.z = 0.3; bm.userData.id = i; g.add(bm);
+
+    const lab = textTexture(String(i + 1), 256, 100, 'bold 60px sans-serif', '#fff', '#111');
+    const lm = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.43), new THREE.MeshBasicMaterial({ map: lab.t }));
+    lm.position.set(0, -1.05, 0.02); g.add(lm);
+
+    levelGroup.add(g);
+    btns.push({ i, mesh: bm, lab, color: col, pressed: false });
+    btnMeshes.push(bm);
+  }
+  scene.add(levelGroup);
 }
 function drawLabel(b, mark) {
   const { g, c, t } = b.lab;
   g.fillStyle = '#111'; g.fillRect(0, 0, c.width, c.height);
-  g.fillStyle = '#fff'; g.font = 'bold 70px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = '#fff'; g.font = 'bold 60px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText(mark ? `${b.i + 1} ${mark}` : String(b.i + 1), c.width / 2, c.height / 2 + 4);
   t.needsUpdate = true;
 }
-function resetButtons() {
-  btns.forEach(b => {
-    b.pressed = false;
-    b.mesh.material.color.copy(b.color); b.mesh.material.emissive.copy(b.color);
-    b.mesh.material.emissiveIntensity = 0.35;
-    b.mesh.scale.z = 1; b.mesh.position.z = 0.3;
-    drawLabel(b, '');
-  });
-}
 function pressVisual(id, mark, isExit) {
-  const b = btns[id]; b.pressed = true;
+  const b = btns[id]; if (!b) return; b.pressed = true;
   b.mesh.scale.z = 0.4; b.mesh.position.z = 0.21;
   if (isExit) { b.mesh.material.color.set(0x44ff88); b.mesh.material.emissive.set(0x22ff66); b.mesh.material.emissiveIntensity = 1.2; }
   else { b.mesh.material.color.set(0x555a66); b.mesh.material.emissive.set(0x000000); }
   drawLabel(b, mark);
 }
+buildLevel(4, 2, 10, 4);
 
 // ---------- アバター ----------
 function makeAvatar(name, slot) {
@@ -299,6 +323,7 @@ function onLobby(m) {
     });
     const isHost = myId === hostId;
     $('startBtn').style.display = isHost ? 'block' : 'none';
+    $('sizeBox').style.display = isHost ? 'block' : 'none';
     $('waitMsg').textContent = isHost ? `${m.players.length}/5人 参加中` : 'ホストの開始を待っています…';
   }
   syncAvatars();
@@ -317,7 +342,7 @@ function renderHudPlayers() {
 
 function onStart(m) {
   phase = 'playing';
-  resetButtons();
+  buildLevel(m.cols, m.rows, m.half, m.sx);
   const s = m.spawns[myId] || [0, 0];
   me.x = s[0]; me.z = s[1]; yaw = 0; pitch = 0;
   frozenUntil = 0; darkUntil = 0; $('dark').style.opacity = 0; $('status').textContent = '';
@@ -355,14 +380,14 @@ function onEnd(m) {
   phase = 'ended';
   document.exitPointerLock && document.exitPointerLock();
   $('lock').style.display = 'none';
-  if (m.exitId >= 0 && !btns[m.exitId].pressed) pressVisual(m.exitId, MARK.exit, true);
+  if (m.exitId >= 0 && btns[m.exitId] && !btns[m.exitId].pressed) pressVisual(m.exitId, MARK.exit, true);
   const win = m.winner;
   if (win) {
     $('endTitle').textContent = win.id === myId ? '🎉 脱出成功!!' : `🚪 ${win.name} が脱出!`;
-    $('endSub').textContent = `出口は ${WALL_NAMES[Math.floor(m.exitId / 8)]}の壁の ${m.exitId + 1}番 でした`;
+    $('endSub').textContent = `出口は ${WALL_NAMES[Math.floor(m.exitId / level.per)]}の壁の ${m.exitId + 1}番 でした`;
   } else {
     $('endTitle').textContent = '⏰ 時間切れ… 全員ゲームオーバー';
-    $('endSub').textContent = `出口は ${WALL_NAMES[Math.floor(m.exitId / 8)]}の壁の ${m.exitId + 1}番 でした`;
+    $('endSub').textContent = `出口は ${WALL_NAMES[Math.floor(m.exitId / level.per)]}の壁の ${m.exitId + 1}番 でした`;
   }
   $('againBtn').style.display = myId === hostId ? 'block' : 'none';
   if (myId !== hostId) $('endSub').textContent += '\nホストが次のゲームを始めるのを待っています…';
@@ -392,7 +417,7 @@ function beep(f, d) {
 $('joinBtn').onclick = connect;
 $('name').addEventListener('keydown', e => e.key === 'Enter' && connect());
 $('room').addEventListener('keydown', e => e.key === 'Enter' && connect());
-$('startBtn').onclick = () => send({ t: 'start' });
+$('startBtn').onclick = () => send({ t: 'start', size: $('size').value });
 $('againBtn').onclick = () => send({ t: 'again' });
 $('lock').onclick = () => $('c').requestPointerLock();
 $('c').onclick = () => { if (phase === 'playing' && !locked) $('c').requestPointerLock(); };
@@ -440,8 +465,9 @@ function loop(now) {
         const len = Math.hypot(f, s), sp = (keys.ShiftLeft ? 8 : 5) * dt;
         me.x += (-Math.sin(yaw) * f + Math.cos(yaw) * s) / len * sp;
         me.z += (-Math.cos(yaw) * f - Math.sin(yaw) * s) / len * sp;
-        me.x = Math.max(-9.4, Math.min(9.4, me.x));
-        me.z = Math.max(-9.4, Math.min(9.4, me.z));
+        const lim = level.half - 0.6;
+        me.x = Math.max(-lim, Math.min(lim, me.x));
+        me.z = Math.max(-lim, Math.min(lim, me.z));
       }
     }
     // 状態表示
