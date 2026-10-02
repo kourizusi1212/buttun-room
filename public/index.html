@@ -38,6 +38,12 @@
   #toast.show{opacity:1}
   #status{position:absolute;left:50%;bottom:10%;transform:translateX(-50%);font-size:34px;font-weight:700;text-shadow:0 2px 10px #000}
   #dark{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .4s;z-index:4}
+  #flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:4}
+  #errbar{position:fixed;left:0;right:0;bottom:0;background:#a00;color:#fff;font-size:12px;padding:6px 10px;z-index:99;display:none;white-space:pre-wrap}
+  .fx-rainbow{animation:hue 1.6s linear infinite}
+  .fx-negative{filter:invert(1)}
+  .fx-blur{filter:blur(6px)}
+  @keyframes hue{from{filter:hue-rotate(0deg) saturate(2)}to{filter:hue-rotate(360deg) saturate(2)}}
   #lock{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:8;background:rgba(0,0,0,.55);font-size:22px;cursor:pointer;text-align:center;line-height:1.8}
   #end{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:9;background:rgba(0,0,0,.7);text-align:center}
   #end h2{font-size:38px;margin:0 0 8px}
@@ -47,6 +53,8 @@
 <body>
 <canvas id="c"></canvas>
 <div id="dark"></div>
+<div id="flash"></div>
+<div id="errbar"></div>
 
 <!-- メニュー -->
 <div class="panel" id="menu">
@@ -95,11 +103,15 @@
   <div id="toast"></div>
   <div id="status"></div>
 </div>
-<div id="lock">クリックしてゲームに戻る<br><small>(ESCでマウス解除)</small></div>
+<div id="lock">クリックしてゲーム開始 / 再開<br><small>(ESCでマウス解除)</small></div>
 <div id="end"><div class="card"><h2 id="endTitle"></h2><p class="sub" id="endSub"></p><button class="big" id="againBtn">もう一度遊ぶ</button></div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
+window.addEventListener('error', e => {
+  const b = document.getElementById('errbar'); if (!b) return;
+  b.style.display = 'block'; b.textContent = 'エラー: ' + e.message + ' (' + (e.lineno || '?') + ')';
+});
 const $ = id => document.getElementById(id);
 const SY = 2.3;   // ボタンの縦間隔
 const WALL_NAMES = ['北', '東', '南', '西'];
@@ -111,6 +123,9 @@ let ws = null, myId = null, hostId = null, phase = 'menu';
 let lobbyPlayers = [];
 let locked = false;
 let frozenUntil = 0, darkUntil = 0, endAt = 0;
+let fxs = {};          // 効果名 -> {until, v, label}
+let shield = false, flashUntil = 0;
+const fxOn = (k, t = Date.now()) => fxs[k] && fxs[k].until > t ? fxs[k] : null;
 const keys = {};
 let yaw = 0, pitch = 0;
 const me = { x: 0, z: 0 };
@@ -121,6 +136,7 @@ const renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0d14);
+scene.fog = new THREE.FogExp2(0x0b0d14, 0);
 const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 100);
 camera.rotation.order = 'YXZ';
 camera.position.set(0, 1.7, 0);
@@ -345,7 +361,8 @@ function onStart(m) {
   buildLevel(m.cols, m.rows, m.half, m.sx);
   const s = m.spawns[myId] || [0, 0];
   me.x = s[0]; me.z = s[1]; yaw = 0; pitch = 0;
-  frozenUntil = 0; darkUntil = 0; $('dark').style.opacity = 0; $('status').textContent = '';
+  frozenUntil = 0; darkUntil = 0; fxs = {}; shield = false; flashUntil = 0;
+  $('dark').style.opacity = 0; $('flash').style.opacity = 0; $('status').textContent = ''; $('c').className = '';
   endAt = Date.now() + m.remain;
   $('log').innerHTML = ''; $('hints').textContent = 'まだありません';
   $('lobby').style.display = 'none'; $('end').style.display = 'none';
@@ -356,22 +373,39 @@ function onStart(m) {
 }
 
 let firstHint = true;
+function addHint(text, cls) {
+  if (firstHint) { $('hints').innerHTML = ''; firstHint = false; }
+  const d = document.createElement('div'); d.textContent = text; if (cls) d.style.color = cls;
+  $('hints').appendChild(d);
+}
+function applyFx(f) {
+  const t = Date.now();
+  switch (f.k) {
+    case 'freeze': frozenUntil = t + f.d; break;
+    case 'dark': darkUntil = t + f.d; $('dark').style.opacity = 0.97; break;
+    case 'tp': me.x = f.x; me.z = f.z; break;
+    case 'flash': flashUntil = t + f.d; $('flash').style.transition = 'none'; $('flash').style.opacity = 1; break;
+    case 'shield': shield = true; break;
+    case 'shieldbreak': shield = false; toast('🛡 バリアが悪い効果を防いだ!', 2500); break;
+    case 'note': addHint(f.text, '#8be9fd'); toast(f.text, 5000); break;
+    default: fxs[f.k] = { until: t + (f.d || 0), v: f.v, label: f.label };
+  }
+}
 function onPressed(m) {
   const isExit = m.type === 'exit';
-  pressVisual(m.id, MARK[m.type] || '', isExit);
+  pressVisual(m.id, m.mark || '', isExit);
+  (m.auto || []).forEach(i => pressVisual(i, '🧹', false));
   beep(isExit ? 880 : m.type === 'none' ? 220 : 440, 0.15);
   const who = m.by === myId ? 'あなた' : m.name;
-  log(`${who}:${m.id + 1}番 → ${MARK[m.type]} ${m.type === 'hint' ? 'ヒント' : m.text}`);
-  if (m.type === 'hint') {
-    if (firstHint) { $('hints').innerHTML = ''; firstHint = false; }
-    const d = document.createElement('div'); d.textContent = `・${m.text}(${m.id + 1}番)`; $('hints').appendChild(d);
-    toast('💡 ' + m.text, 4500);
-  } else if (m.by === myId) toast(m.text, 3000);
-  if (m.by === myId) {
-    if (m.type === 'freeze') frozenUntil = Date.now() + m.dur;
-    if (m.type === 'dark') { darkUntil = Date.now() + m.dur; $('dark').style.opacity = 0.97; }
-    if (m.type === 'warp' && m.to) { me.x = m.to[0]; me.z = m.to[1]; }
-  }
+  log(`${who}:${m.id + 1}番 → ${m.mark} ${m.type === 'hint' ? 'ヒント' : m.text}`);
+
+  const hs = m.hints || [];
+  hs.forEach(h => addHint(h.unsure ? `・❓${h.text}(${m.id + 1}番・真偽不明)` : `・${h.text}(${m.id + 1}番)`, h.unsure ? '#ffb86c' : null));
+  if (hs.length) toast(hs.map(h => (h.unsure ? '🤡❓ ' : '💡 ') + h.text).join('\n'), 5000);
+  else toast(`${m.mark} ${m.text}`, m.by === myId ? 3500 : 2500);
+
+  if (m.time != null) endAt = Date.now() + m.time;
+  ((m.fx || {})[myId] || []).forEach(applyFx);
 }
 // 新規ゲームでヒント欄初期化
 const _onStart = onStart; onStart = function (m) { firstHint = true; _onStart(m); };
@@ -450,7 +484,7 @@ addEventListener('mousedown', e => {
 });
 
 // ---------- メインループ ----------
-let last = performance.now(), sendAcc = 0;
+let last = performance.now(), sendAcc = 0, eyeY = 1.7, fovNow = 75;
 function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -459,10 +493,12 @@ function loop(now) {
   if (phase === 'playing') {
     const frozen = t < frozenUntil;
     if (locked && !frozen) {
-      const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
-      const s = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+      const inv = fxOn('invert', t) ? -1 : 1;
+      const f = ((keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0)) * inv;
+      const s = ((keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0)) * inv;
       if (f || s) {
-        const len = Math.hypot(f, s), sp = (keys.ShiftLeft ? 8 : 5) * dt;
+        const sf = fxOn('speed', t), mul = sf ? sf.v : 1;
+        const len = Math.hypot(f, s), sp = (keys.ShiftLeft ? 8 : 5) * mul * dt;
         me.x += (-Math.sin(yaw) * f + Math.cos(yaw) * s) / len * sp;
         me.z += (-Math.cos(yaw) * f - Math.sin(yaw) * s) / len * sp;
         const lim = level.half - 0.6;
@@ -471,9 +507,23 @@ function loop(now) {
       }
     }
     // 状態表示
-    if (frozen) $('status').textContent = `❄ 凍結中 ${Math.ceil((frozenUntil - t) / 1000)}`;
-    else if (t < darkUntil) $('status').textContent = `🌑 暗闇 ${Math.ceil((darkUntil - t) / 1000)}`;
-    else { $('status').textContent = ''; if ($('dark').style.opacity !== '0') $('dark').style.opacity = 0; }
+    const tags = [];
+    if (shield) tags.push('🛡バリア');
+    if (frozen) tags.push(`❄凍結 ${Math.ceil((frozenUntil - t) / 1000)}`);
+    if (t < darkUntil) tags.push(`🌑暗闇 ${Math.ceil((darkUntil - t) / 1000)}`);
+    else if ($('dark').style.opacity !== '0') $('dark').style.opacity = 0;
+    for (const k in fxs) { const e = fxOn(k, t); if (e && e.label) tags.push(`${e.label} ${Math.ceil((e.until - t) / 1000)}`); }
+    $('status').textContent = tags.join('   ');
+
+    // 画面効果 (フィルタ / フラッシュ / 回転)
+    const flt = fxOn('filter', t);
+    const cls = flt ? 'fx-' + flt.v : '';
+    if ($('c').className !== cls) $('c').className = cls;
+    if (flashUntil) {
+      if (t >= flashUntil) { flashUntil = 0; $('flash').style.opacity = 0; }
+      else { $('flash').style.transition = 'opacity .2s'; $('flash').style.opacity = Math.min(1, (flashUntil - t) / 2000); }
+    }
+    if (fxOn('spin', t)) yaw += 2.4 * dt;
 
     // タイマー
     const rem = Math.max(0, endAt - t), sec = Math.ceil(rem / 1000);
@@ -493,8 +543,17 @@ function loop(now) {
     if (sendAcc > 0.066) { sendAcc = 0; send({ t: 'move', x: me.x, z: me.z, ry: yaw }); }
   }
 
-  camera.position.set(me.x, 1.7, me.z);
-  camera.rotation.set(pitch, yaw, 0);
+  // カメラ (高さ / 視野 / 揺れ / 霧)
+  const tNow = Date.now();
+  const eye = fxOn('eye', tNow), fv = fxOn('fov', tNow);
+  eyeY += ((eye ? eye.v : 1.7) - eyeY) * Math.min(1, dt * 5);
+  fovNow += ((fv ? fv.v : 75) - fovNow) * Math.min(1, dt * 5);
+  if (Math.abs(camera.fov - fovNow) > 0.05) { camera.fov = fovNow; camera.updateProjectionMatrix(); }
+  const sh = fxOn('shake', tNow) ? 0.07 : 0;
+  camera.position.set(me.x + (Math.random() - .5) * sh, eyeY + (Math.random() - .5) * sh, me.z + (Math.random() - .5) * sh);
+  camera.rotation.set(pitch + (Math.random() - .5) * sh * 0.4, yaw + (Math.random() - .5) * sh * 0.4, 0);
+  const fogOn = fxOn('fog', tNow);
+  scene.fog.density += ((fogOn ? 0.16 : 0) - scene.fog.density) * Math.min(1, dt * 4);
 
   avatars.forEach(a => {
     a.g.position.x += (a.tx - a.g.position.x) * Math.min(1, dt * 12);

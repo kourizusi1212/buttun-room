@@ -26,16 +26,61 @@ function makeLevel(key) {
   return { cols, rows, per, n, sx, half };
 }
 
-// 出口1 + ヒント19% + 凍結19% + 暗闇12.5% + ワープ12.5% + 残りハズレ
+// ---------- イベント定義 ----------
+// self: 押した人 / others: 他の全員 / all: 全員(押した人含む)に付与する効果
+// bad:true の効果は「バリア🛡」で防げる
+const EVENTS = {
+  // --- 押した人に起こる ---
+  speedup:  { mark: '⚡', text: '靴が光った! 12秒間ダッシュ力アップ', self: [{ k: 'speed', v: 1.8, d: 12000, label: '⚡ダッシュ' }] },
+  slow:     { mark: '🐌', text: '足が急に重くなった… 10秒間スロー', self: [{ k: 'speed', v: 0.4, d: 10000, label: '🐌鈍足', bad: 1 }] },
+  reverse:  { mark: '🙃', text: '操作が逆になった! 10秒間', self: [{ k: 'invert', d: 10000, label: '🙃操作反転', bad: 1 }] },
+  fisheye:  { mark: '👁', text: '視界が歪む! 10秒間の超広角', self: [{ k: 'fov', v: 130, d: 10000, label: '👁超広角', bad: 1 }] },
+  zoom:     { mark: '🔭', text: '望遠鏡モード! 10秒間ズームしっぱなし', self: [{ k: 'fov', v: 28, d: 10000, label: '🔭望遠', bad: 1 }] },
+  quake:    { mark: '📳', text: '地震だ! 8秒間画面が揺れる', self: [{ k: 'shake', d: 8000, label: '📳地震', bad: 1 }] },
+  fog:      { mark: '🌫', text: '濃い霧が立ちこめた! 12秒間', self: [{ k: 'fog', d: 12000, label: '🌫濃霧', bad: 1 }] },
+  tiny:     { mark: '🐭', text: '体が縮んだ! 12秒間ネズミの視点', self: [{ k: 'eye', v: 0.55, d: 12000, label: '🐭縮小' }] },
+  giant:    { mark: '🦒', text: '体が巨大化! 12秒間 高い視点で部屋を見渡せる', self: [{ k: 'eye', v: 4.2, d: 12000, label: '🦒巨大化' }] },
+  rainbow:  { mark: '🌈', text: '世界が虹色に染まった! 10秒間', self: [{ k: 'filter', v: 'rainbow', d: 10000, label: '🌈虹色', bad: 1 }] },
+  negative: { mark: '🎞', text: '色が反転した! 10秒間', self: [{ k: 'filter', v: 'negative', d: 10000, label: '🎞色反転', bad: 1 }] },
+  blur:     { mark: '😵‍💫', text: '視界がぼやけた! 8秒間', self: [{ k: 'filter', v: 'blur', d: 8000, label: '😵ぼやけ', bad: 1 }] },
+  flash:    { mark: '📸', text: 'カメラのフラッシュで目がくらんだ!', self: [{ k: 'flash', d: 3500, bad: 1 }] },
+  spin:     { mark: '💫', text: '目が回る〜! 4秒間 勝手にぐるぐる回転', self: [{ k: 'spin', d: 4000, label: '💫回転', bad: 1 }] },
+  shield:   { mark: '🛡', text: 'バリア獲得! 次の悪いイベントを1回だけ無効化', self: [{ k: 'shield' }] },
+
+  // --- 全員 / 他の人に起こる ---
+  blackoutAll: { mark: '🔌', text: '全員停電! 5秒間みんな真っ暗', all: [{ k: 'dark', d: 5000, label: '🌑暗闇', bad: 1 }] },
+  freezeAll:   { mark: '🥶', text: '寒波襲来! 全員が3秒間凍りついた', all: [{ k: 'freeze', d: 3000, label: '❄凍結', bad: 1 }] },
+  blindOthers: { mark: '🕶', text: 'まぶしい光! 押した人以外の全員が5秒間真っ暗', others: [{ k: 'dark', d: 5000, label: '🌑暗闇', bad: 1 }] },
+
+  // --- 特殊 (関数で処理) ---
+  swap:     { mark: '🔄', text: '全員の位置がシャッフルされた!' },
+  gather:   { mark: '🧲', text: '磁石が作動! 全員が押した人の周りに集められた' },
+  scatter:  { mark: '💥', text: '爆発! 全員がバラバラに吹き飛んだ' },
+  timeAdd:  { mark: '⏳', text: '砂時計をひっくり返した! 残り時間 +30秒' },
+  timeCut:  { mark: '⌛', text: '時計が早送りに… 残り時間 -30秒' },
+  cleaner:  { mark: '🧹', text: 'お掃除ロボ登場!' },
+  crystal:  { mark: '🔮', text: '水晶玉が輝く… ヒントが2つ同時に明かされた' },
+  clown:    { mark: '🤡', text: 'ピエロがささやく「出口はね…」(本当かウソかは不明)' },
+  snipe:    { mark: '🎯', text: '指名凍結!' },
+  thermo:   { mark: '🌡', text: '温度計が反応! 押した人だけに出口までの距離が見えた' },
+  compass:  { mark: '🧭', text: '羅針盤が動く! 押した人だけに出口の方角が見えた' },
+  gamble:   { mark: '🎰', text: 'ギャンブルボタン!' },
+};
+const EVENT_KEYS = Object.keys(EVENTS);
+
+// ボタン数に応じた内訳: 出口1 + ヒント10% + 凍結8% + 暗闇6% + ワープ6% + ハズレ15% + 残りは新イベント
 function makePool(n) {
-  const h = Math.round(n * 0.19), f = Math.round(n * 0.19);
-  const d = Math.round(n * 0.125), w = Math.round(n * 0.125);
-  const none = n - 1 - h - f - d - w;
+  const h = Math.round(n * 0.10), f = Math.round(n * 0.08);
+  const d = Math.round(n * 0.06), w = Math.round(n * 0.06), none = Math.round(n * 0.15);
+  const rest = Math.max(0, n - 1 - h - f - d - w - none);
+  const ev = []; let bag = [];
+  while (ev.length < rest) { if (!bag.length) bag = shuffle([...EVENT_KEYS]); ev.push(bag.pop()); }
   return [
     'exit',
     ...Array(h).fill('hint'), ...Array(f).fill('freeze'),
     ...Array(d).fill('dark'), ...Array(w).fill('warp'),
     ...Array(none).fill('none'),
+    ...ev,
   ];
 }
 
@@ -100,13 +145,13 @@ function startGame(room, sizeKey) {
   list.forEach((p, i) => {
     const a = (i / list.length) * Math.PI * 2;
     p.x = Math.cos(a) * 2.5; p.z = Math.sin(a) * 2.5; p.ry = 0;
-    p.frozenUntil = 0;
+    p.frozenUntil = 0; p.shield = false;
     spawns[p.id] = [p.x, p.z];
   });
   const L = room.level;
   bcast(room, { t: 'start', remain: GAME_TIME, spawns, n: L.n, cols: L.cols, rows: L.rows, half: L.half, sx: L.sx });
 
-  room.timer = setTimeout(() => endGame(room, null), GAME_TIME);
+  setRemain(room, GAME_TIME);
   room.ticker = setInterval(() => {
     bcast(room, {
       t: 'players',
@@ -126,9 +171,9 @@ function endGame(room, winner) {
 }
 
 // 出口について本当のことだけを言うヒントを作る
-function genHint(room) {
+function genHint(room, e = room.exitId, record = true) {
   const { cols, rows, per, n } = room.level;
-  const e = room.exitId, num = e + 1;
+  const num = e + 1;
   const w = Math.floor(e / per), k = e % per, c = k % cols, r = Math.floor(k / cols);
   const pick = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1));
   const cands = [];
@@ -151,12 +196,30 @@ function genHint(room) {
   const lo = Math.max(1, num - pick(0, span)), hi = Math.min(n, lo + span);
   cands.push(`出口の番号は【${lo}〜${hi}番】の間にある`);
 
-  const fresh = cands.filter(h => !room.hintsGiven.has(h));
+  const fresh = record ? cands.filter(h => !room.hintsGiven.has(h)) : cands;
   const pool = fresh.length ? fresh : cands;
   const h = pool[Math.floor(Math.random() * pool.length)];
-  room.hintsGiven.add(h);
+  if (record) room.hintsGiven.add(h);
   return h;
 }
+
+// ボタンの3D位置 (クライアントの配置と同じ計算)
+const WALL_N = [[0, 0, 1], [-1, 0, 0], [0, 0, -1], [1, 0, 0]];
+const WALL_ROT = [0, -Math.PI / 2, Math.PI, Math.PI / 2];
+function btnPos(L, i) {
+  const w = Math.floor(i / L.per), k = i % L.per, c = k % L.cols, r = Math.floor(k / L.cols);
+  const n = WALL_N[w], th = WALL_ROT[w], off = (c - (L.cols - 1) / 2) * L.sx;
+  return { x: -n[0] * L.half + Math.cos(th) * off, z: -n[2] * L.half - Math.sin(th) * off, y: 1.7 + r * 2.3 };
+}
+
+function setRemain(room, ms) {
+  room.endsAt = Date.now() + ms;
+  clearTimeout(room.timer);
+  room.timer = setTimeout(() => endGame(room, null), ms);
+}
+
+const DIRS8 = ['北', '北東', '東', '南東', '南', '南西', '西', '北西'];
+const MARKS = { exit: '🚪', hint: '💡', freeze: '❄', dark: '🌑', warp: '🌀', none: '・' };
 
 function handlePress(room, p, id) {
   if (room.phase !== 'playing') return;
@@ -166,20 +229,117 @@ function handlePress(room, p, id) {
   if (p.frozenUntil > now) return;
 
   room.pressed.add(id);
+  const L = room.level;
   const type = room.types[id];
-  const out = { t: 'pressed', id, by: p.id, name: p.name, type, text: '', dur: 0 };
+  const ev = EVENTS[type];
+  const out = { t: 'pressed', id, by: p.id, name: p.name, type,
+                mark: ev ? ev.mark : (MARKS[type] || ''), text: ev ? ev.text : '',
+                fx: {}, hints: [], auto: [] };
+  const all = [...room.players.values()];
+  const others = all.filter(q => q.id !== p.id);
+  const half = L.half - 2;
+
+  // 効果を付与 (悪い効果はバリアで防げる)
+  const give = (target, fx) => {
+    const list = (out.fx[target.id] = out.fx[target.id] || []);
+    if (fx.bad && target.shield) {
+      target.shield = false; list.push({ k: 'shieldbreak' }); return;
+    }
+    if (fx.k === 'freeze') target.frozenUntil = Math.max(target.frozenUntil, now + fx.d);
+    if (fx.k === 'shield') target.shield = true;
+    list.push(fx);
+  };
+  const teleport = (target, x, z) => {
+    target.x = Math.max(-half, Math.min(half, x)); target.z = Math.max(-half, Math.min(half, z));
+    give(target, { k: 'tp', x: target.x, z: target.z });
+  };
 
   switch (type) {
     case 'exit': out.text = '出口だ!! 扉が開いた!'; break;
-    case 'hint': out.text = genHint(room); break;
-    case 'freeze': out.dur = 5000; p.frozenUntil = now + 5000; out.text = '床が凍りついた! 5秒間動けない'; break;
-    case 'dark': out.dur = 6000; out.text = '照明が落ちた! 6秒間なにも見えない'; break;
-    case 'warp': {
-      const R = room.level.half - 2; p.x = rand(-R, R); p.z = rand(-R, R);
-      out.to = [p.x, p.z]; out.text = '足元が光り、どこかへワープした!'; break;
+    case 'hint': out.hints.push({ text: genHint(room) }); out.text = 'ヒントが見つかった'; break;
+    case 'freeze': give(p, { k: 'freeze', d: 5000, label: '❄凍結', bad: 1 }); out.text = '床が凍りついた! 5秒間動けない'; break;
+    case 'dark': give(p, { k: 'dark', d: 6000, label: '🌑暗闇', bad: 1 }); out.text = '照明が落ちた! 6秒間なにも見えない'; break;
+    case 'warp': teleport(p, rand(-half, half), rand(-half, half)); out.text = '足元が光り、どこかへワープした!'; break;
+    case 'none': out.text = '……なにも起こらなかった'; break;
+    default: {
+      // 付与型イベント
+      if (ev.self) ev.self.forEach(f => give(p, f));
+      if (ev.others) others.forEach(q => ev.others.forEach(f => give(q, f)));
+      if (ev.all) all.forEach(q => ev.all.forEach(f => give(q, f)));
+
+      // 特殊イベント
+      switch (type) {
+        case 'swap': {
+          const pos = shuffle(all.map(q => [q.x, q.z]));
+          all.forEach((q, i) => teleport(q, pos[i][0], pos[i][1]));
+          break;
+        }
+        case 'gather':
+          all.forEach(q => { if (q.id !== p.id) teleport(q, p.x + rand(-1.8, 1.8), p.z + rand(-1.8, 1.8)); });
+          break;
+        case 'scatter':
+          all.forEach(q => teleport(q, rand(-half, half), rand(-half, half)));
+          break;
+        case 'timeAdd': { const r = Math.max(0, room.endsAt - now) + 30000; setRemain(room, r); out.time = r; break; }
+        case 'timeCut': { const r = Math.max(15000, Math.max(0, room.endsAt - now) - 30000); setRemain(room, r); out.time = r; break; }
+        case 'cleaner': {
+          const duds = [];
+          room.types.forEach((t, i) => { if (t === 'none' && !room.pressed.has(i)) duds.push(i); });
+          const pick = shuffle(duds).slice(0, 3);
+          pick.forEach(i => room.pressed.add(i));
+          out.auto = pick;
+          out.text = pick.length ? `お掃除ロボ登場! ハズレボタン${pick.length}個を片付けた(${pick.map(i => i + 1).join('・')}番)` : 'お掃除ロボ登場! …しかし掃除するものがなかった';
+          break;
+        }
+        case 'crystal':
+          out.hints.push({ text: genHint(room) }, { text: genHint(room) });
+          break;
+        case 'clown': {
+          let fake = Math.floor(Math.random() * L.n);
+          if (fake === room.exitId) fake = (fake + 1 + Math.floor(Math.random() * (L.n - 1))) % L.n;
+          out.hints.push({ text: genHint(room, fake, false), unsure: true });
+          break;
+        }
+        case 'snipe': {
+          if (!others.length) { out.text = '指名凍結! …しかし他に誰もいなかった'; break; }
+          const t = others[Math.floor(Math.random() * others.length)];
+          give(t, { k: 'freeze', d: 6000, label: '❄凍結', bad: 1 });
+          out.text = `指名凍結! ${t.name} が6秒間凍りついた`;
+          break;
+        }
+        case 'thermo': {
+          const e = btnPos(L, room.exitId);
+          const dist = Math.hypot(e.x - p.x, e.y - 1.7, e.z - p.z);
+          const temp = dist < 5 ? '🔥激アツ' : dist < 10 ? '♨熱い' : dist < 15 ? '😐ぬるい' : '🧊冷たい';
+          give(p, { k: 'note', text: `🌡 出口まで約${Math.round(dist)}m(${temp})` });
+          break;
+        }
+        case 'compass': {
+          const e = btnPos(L, room.exitId);
+          const ang = Math.atan2(e.x - p.x, -(e.z - p.z));
+          const dir = DIRS8[(Math.round(ang / (Math.PI / 4)) + 8) % 8];
+          give(p, { k: 'note', text: `🧭 押した場所から見て、出口は【${dir}】の方向` });
+          break;
+        }
+        case 'gamble': {
+          if (Math.random() < 0.5) {
+            out.hints.push({ text: genHint(room) }, { text: genHint(room) });
+            out.text = '🎰 大当たり!! ヒントが2つ出た';
+          } else {
+            give(p, { k: 'freeze', d: 8000, label: '❄凍結', bad: 1 });
+            out.text = '🎰 ハズレ… 8秒間凍りついた';
+          }
+          break;
+        }
+      }
     }
-    default: out.text = '……なにも起こらなかった';
   }
+
+  // バリアが身代わりになった場合の注記
+  const broke = Object.values(out.fx).some(l => l.some(f => f.k === 'shieldbreak'));
+  if (broke) out.text += ' (🛡バリアが悪い効果を防いだ!)';
+  out.shielded = p.shield ? [p.id] : [];
+
   bcast(room, out);
   if (type === 'exit') endGame(room, p);
 }
