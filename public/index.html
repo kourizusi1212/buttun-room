@@ -86,7 +86,7 @@
     </div>
     <button class="big" id="startBtn">ゲーム開始</button>
     <p class="sub" id="waitMsg" style="margin-top:12px;text-align:center"></p>
-    <p class="sub"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 / マウス 視点 / クリック ボタンを押す</p>
+    <p class="sub"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 / <kbd>Space</kbd> ジャンプ(空中で連打すると高く登れる) / マウス 視点 / クリック ボタンを押す</p>
   </div>
 </div>
 
@@ -123,6 +123,7 @@ let ws = null, myId = null, hostId = null, phase = 'menu';
 let lobbyPlayers = [];
 let locked = false;
 let frozenUntil = 0, darkUntil = 0, endAt = 0;
+let jumpY = 0, vy = 0, jumpReq = false;   // ジャンプ
 let fxs = {};          // 効果名 -> {until, v, label}
 let shield = false, flashUntil = 0;
 const fxOn = (k, t = Date.now()) => fxs[k] && fxs[k].until > t ? fxs[k] : null;
@@ -289,7 +290,7 @@ function syncAvatars() {
   for (const [id, a] of avatars) if (!ids.has(id)) { scene.remove(a.g); avatars.delete(id); }
   lobbyPlayers.forEach(p => {
     if (p.id === myId || avatars.has(p.id)) return;
-    avatars.set(p.id, { g: makeAvatar(p.name, p.slot), tx: 0, tz: 0, try: 0 });
+    avatars.set(p.id, { g: makeAvatar(p.name, p.slot), tx: 0, ty: 0, tz: 0, try: 0 });
   });
   const vis = phase === 'playing' || phase === 'ended';
   avatars.forEach(a => a.g.visible = vis);
@@ -320,7 +321,7 @@ function handle(m) {
     case 'lobby': onLobby(m); break;
     case 'start': onStart(m); break;
     case 'players':
-      m.list.forEach(p => { const a = avatars.get(p.id); if (a) { a.tx = p.x; a.tz = p.z; a.try = p.ry; } });
+      m.list.forEach(p => { const a = avatars.get(p.id); if (a) { a.tx = p.x; a.ty = p.y || 0; a.tz = p.z; a.try = p.ry; } });
       break;
     case 'pressed': onPressed(m); break;
     case 'left': log(`${m.name} が退室した`); break;
@@ -367,7 +368,7 @@ function onStart(m) {
   buildLevel(m.cols, m.rows, m.half, m.sx);
   const s = m.spawns[myId] || [0, 0];
   me.x = s[0]; me.z = s[1]; yaw = 0; pitch = 0;
-  frozenUntil = 0; darkUntil = 0; fxs = {}; shield = false; flashUntil = 0;
+  frozenUntil = 0; darkUntil = 0; fxs = {}; shield = false; flashUntil = 0; jumpY = 0; vy = 0; jumpReq = false;
   $('dark').style.opacity = 0; $('flash').style.opacity = 0; $('status').textContent = ''; $('c').className = '';
   endAt = Date.now() + m.remain;
   $('log').innerHTML = ''; $('hints').textContent = 'まだありません';
@@ -471,7 +472,13 @@ addEventListener('mousemove', e => {
   yaw -= e.movementX * 0.0022;
   pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0022));
 });
-addEventListener('keydown', e => { keys[e.code] = true; });
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (phase === 'playing' && locked && !e.repeat && Date.now() >= frozenUntil) jumpReq = true;
+  }
+});
 addEventListener('keyup', e => { keys[e.code] = false; });
 
 // ボタン押下
@@ -479,7 +486,7 @@ const ray = new THREE.Raycaster();
 function lookedButton() {
   ray.setFromCamera({ x: 0, y: 0 }, camera);
   const hit = ray.intersectObjects(btnMeshes)[0];
-  if (hit && hit.distance < 6) return hit.object.userData.id;
+  if (hit && hit.distance < 6.5) return hit.object.userData.id;
   return -1;
 }
 addEventListener('mousedown', e => {
@@ -498,6 +505,13 @@ function loop(now) {
 
   if (phase === 'playing') {
     const frozen = t < frozenUntil;
+    // ジャンプ: スペースで跳ぶ。空中でもう一度押すと連続ジャンプできるので、高いボタンへは跳び上がって届く
+    if (jumpReq) { jumpReq = false; if (locked && !frozen) vy = 7.5; }
+    vy -= 16 * dt;
+    jumpY += vy * dt;
+    if (jumpY <= 0) { jumpY = 0; vy = 0; }
+    const maxJump = Math.max(0, level.H - 2.0);
+    if (jumpY > maxJump) { jumpY = maxJump; if (vy > 0) vy = 0; }
     if (locked && !frozen) {
       const inv = fxOn('invert', t) ? -1 : 1;
       const f = ((keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0)) * inv;
@@ -546,7 +560,7 @@ function loop(now) {
 
     // 位置送信
     sendAcc += dt;
-    if (sendAcc > 0.066) { sendAcc = 0; send({ t: 'move', x: me.x, z: me.z, ry: yaw }); }
+    if (sendAcc > 0.066) { sendAcc = 0; send({ t: 'move', x: me.x, y: jumpY, z: me.z, ry: yaw }); }
   }
 
   // カメラ (高さ / 視野 / 揺れ / 霧)
@@ -556,7 +570,7 @@ function loop(now) {
   fovNow += ((fv ? fv.v : 75) - fovNow) * Math.min(1, dt * 5);
   if (Math.abs(camera.fov - fovNow) > 0.05) { camera.fov = fovNow; camera.updateProjectionMatrix(); }
   const sh = fxOn('shake', tNow) ? 0.07 : 0;
-  camera.position.set(me.x + (Math.random() - .5) * sh, eyeY + (Math.random() - .5) * sh, me.z + (Math.random() - .5) * sh);
+  camera.position.set(me.x + (Math.random() - .5) * sh, Math.min(level.H - 0.3, eyeY + jumpY) + (Math.random() - .5) * sh, me.z + (Math.random() - .5) * sh);
   camera.rotation.set(pitch + (Math.random() - .5) * sh * 0.4, yaw + (Math.random() - .5) * sh * 0.4, 0);
   const fogOn = fxOn('fog', tNow);
   scene.fog.density += ((fogOn ? 0.16 : 0) - scene.fog.density) * Math.min(1, dt * 4);
@@ -564,6 +578,7 @@ function loop(now) {
   avatars.forEach(a => {
     a.g.position.x += (a.tx - a.g.position.x) * Math.min(1, dt * 12);
     a.g.position.z += (a.tz - a.g.position.z) * Math.min(1, dt * 12);
+    a.g.position.y += (a.ty - a.g.position.y) * Math.min(1, dt * 12);
     a.g.rotation.y = a.try;
   });
 

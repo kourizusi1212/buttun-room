@@ -155,7 +155,7 @@ function startGame(room, sizeKey) {
   room.ticker = setInterval(() => {
     bcast(room, {
       t: 'players',
-      list: [...room.players.values()].map(p => ({ id: p.id, x: p.x, z: p.z, ry: p.ry })),
+      list: [...room.players.values()].map(p => ({ id: p.id, x: p.x, y: p.y || 0, z: p.z, ry: p.ry })),
     });
   }, 100);
 }
@@ -400,6 +400,7 @@ wss.on('connection', (ws) => {
         const lim = (room.level ? room.level.half : 10) - 0.5;
         p.x = Math.max(-lim, Math.min(lim, m.x));
         p.z = Math.max(-lim, Math.min(lim, m.z));
+        p.y = Math.max(0, Math.min(30, Number(m.y) || 0));
         p.ry = Number(m.ry) || 0;
       }
     }
