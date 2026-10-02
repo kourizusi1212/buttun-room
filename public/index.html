@@ -506,7 +506,7 @@ function loop(now) {
   if (phase === 'playing') {
     const frozen = t < frozenUntil;
     // ジャンプ: スペースで跳ぶ。空中でもう一度押すと連続ジャンプできるので、高いボタンへは跳び上がって届く
-    if (jumpReq) { jumpReq = false; if (locked && !frozen) vy = 7.5; }
+    if (jumpReq) { jumpReq = false; if (locked && !frozen) vy = 11; }
     vy -= 16 * dt;
     jumpY += vy * dt;
     if (jumpY <= 0) { jumpY = 0; vy = 0; }
