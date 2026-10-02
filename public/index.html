@@ -181,7 +181,13 @@ function buildLevel(cols, rows, half, sx) {
     scene.remove(levelGroup);
     levelGroup.traverse(o => {
       if (o.geometry) o.geometry.dispose();
-      if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose && o.material.dispose(); }
+      if (o.material) {
+        const ms = Array.isArray(o.material) ? o.material : [o.material];
+        ms.forEach(mt => {
+          if (mt.map && typeof mt.map.dispose === 'function') mt.map.dispose();
+          if (typeof mt.dispose === 'function') mt.dispose();
+        });
+      }
     });
   }
   const per = cols * rows, n = per * 4;
