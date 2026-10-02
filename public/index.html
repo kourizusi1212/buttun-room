@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ボタンルーム脱出</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:#0b0d14;color:#eef;font-family:"Hiragino Sans","Yu Gothic",Meiryo,sans-serif}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+  .panel{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(5,7,14,.82);z-index:10}
+  .card{background:#171b2b;border:1px solid #2d3555;border-radius:14px;padding:28px 32px;width:min(420px,92vw);box-shadow:0 10px 40px #000a}
+  h1{margin:0 0 6px;font-size:26px;letter-spacing:.05em}
+  .sub{margin:0 0 18px;color:#9aa4cc;font-size:13px;line-height:1.6}
+  label{display:block;font-size:12px;color:#9aa4cc;margin:12px 0 4px}
+  input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #3a4470;background:#0f1220;color:#fff;font-size:16px}
+  button.big{margin-top:18px;width:100%;padding:12px;border:0;border-radius:10px;background:#ff5c7a;color:#fff;font-size:17px;font-weight:700;cursor:pointer}
+  button.big:hover{background:#ff7a93}
+  button.big:disabled{background:#444b6b;cursor:default}
+  #menuMsg{color:#ff8a9d;font-size:13px;min-height:18px;margin-top:10px}
+  #plist{list-style:none;padding:0;margin:10px 0}
+  #plist li{padding:8px 10px;margin:4px 0;background:#0f1220;border-radius:8px;display:flex;align-items:center;gap:8px}
+  .dot{width:12px;height:12px;border-radius:50%;display:inline-block}
+  .code{font-size:30px;letter-spacing:.3em;text-align:center;background:#0f1220;border-radius:8px;padding:8px;margin:6px 0}
+  #hud{position:fixed;inset:0;pointer-events:none;z-index:5;display:none}
+  #cross{position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px;border-radius:50%;background:#fff;opacity:.8;box-shadow:0 0 0 2px #0008}
+  #prompt{position:absolute;left:50%;top:56%;transform:translateX(-50%);background:#000a;padding:6px 14px;border-radius:20px;font-size:15px;display:none}
+  #timer{position:absolute;top:14px;left:50%;transform:translateX(-50%);font-size:28px;font-weight:700;background:#000a;padding:4px 18px;border-radius:10px;font-variant-numeric:tabular-nums}
+  #timer.low{color:#ff5c5c}
+  #left{position:absolute;top:14px;left:14px;width:300px}
+  #log div{background:#000a;margin-bottom:4px;padding:5px 9px;border-radius:6px;font-size:13px;line-height:1.4}
+  #right{position:absolute;top:14px;right:14px;width:260px}
+  #right .box{background:#000b;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:13px}
+  #right h3{margin:0 0 4px;font-size:12px;color:#ffd75e}
+  #hints div{margin:3px 0;line-height:1.4}
+  #toast{position:absolute;left:50%;top:22%;transform:translateX(-50%);max-width:80vw;text-align:center;font-size:22px;font-weight:700;background:#000c;padding:12px 22px;border-radius:12px;opacity:0;transition:opacity .3s}
+  #toast.show{opacity:1}
+  #status{position:absolute;left:50%;bottom:10%;transform:translateX(-50%);font-size:34px;font-weight:700;text-shadow:0 2px 10px #000}
+  #dark{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .4s;z-index:4}
+  #lock{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:8;background:rgba(0,0,0,.55);font-size:22px;cursor:pointer;text-align:center;line-height:1.8}
+  #end{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:9;background:rgba(0,0,0,.7);text-align:center}
+  #end h2{font-size:38px;margin:0 0 8px}
+  kbd{background:#2a3050;border-radius:4px;padding:1px 6px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="dark"></div>
+
+<!-- メニュー -->
+<div class="panel" id="menu">
+  <div class="card">
+    <h1>🔘 ボタンルーム脱出</h1>
+    <p class="sub">壁一面のボタン。正しい出口ボタンはたった1つ。<br>最大5人で、誰が先に脱出できるか勝負!</p>
+    <label>名前</label><input id="name" maxlength="12" placeholder="なまえ">
+    <label>ルームコード(空欄で新規作成)</label><input id="room" maxlength="6" placeholder="例: AB3D">
+    <button class="big" id="joinBtn">入室する</button>
+    <div id="menuMsg"></div>
+  </div>
+</div>
+
+<!-- ロビー -->
+<div class="panel" id="lobby" style="display:none">
+  <div class="card">
+    <h1>ロビー</h1>
+    <p class="sub">このコードを友達に伝えてください</p>
+    <div class="code" id="lobbyCode">----</div>
+    <ul id="plist"></ul>
+    <button class="big" id="startBtn">ゲーム開始</button>
+    <p class="sub" id="waitMsg" style="margin-top:12px;text-align:center"></p>
+    <p class="sub"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 / マウス 視点 / クリック ボタンを押す</p>
+  </div>
+</div>
+
+<!-- HUD -->
+<div id="hud">
+  <div id="cross"></div>
+  <div id="prompt"></div>
+  <div id="timer">5:00</div>
+  <div id="left"><div id="log"></div></div>
+  <div id="right">
+    <div class="box"><h3>プレイヤー</h3><div id="hudPlayers"></div></div>
+    <div class="box"><h3>💡 ヒント</h3><div id="hints">まだありません</div></div>
+  </div>
+  <div id="toast"></div>
+  <div id="status"></div>
+</div>
+<div id="lock">クリックしてゲームに戻る<br><small>(ESCでマウス解除)</small></div>
+<div id="end"><div class="card"><h2 id="endTitle"></h2><p class="sub" id="endSub"></p><button class="big" id="againBtn">もう一度遊ぶ</button></div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const N_BTN = 32, ROOM = 10;
+const WALL_NAMES = ['北', '東', '南', '西'];
+const SLOT_COLORS = ['#ff5252', '#40c4ff', '#69f0ae', '#ffd740', '#e040fb'];
+const MARK = { exit: '🚪', hint: '💡', freeze: '❄', dark: '🌑', warp: '🌀', none: '・' };
+
+// ---------- 状態 ----------
+let ws = null, myId = null, hostId = null, phase = 'menu';
+let lobbyPlayers = [];
+let locked = false;
+let frozenUntil = 0, darkUntil = 0, endAt = 0;
+const keys = {};
+let yaw = 0, pitch = 0;
+const me = { x: 0, z: 0 };
+const avatars = new Map();   // id -> {g, tx, tz, try}
+
+// ---------- three.js 基本 ----------
+const renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0d14);
+const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 100);
+camera.rotation.order = 'YXZ';
+camera.position.set(0, 1.7, 0);
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+scene.add(new THREE.AmbientLight(0x9098b8, 0.75));
+const lamp = new THREE.PointLight(0xfff2dd, 0.9, 40); lamp.position.set(0, 5.5, 0); scene.add(lamp);
+[[-7, 3, -7], [7, 3, -7], [-7, 3, 7], [7, 3, 7]].forEach(p => {
+  const l = new THREE.PointLight(0xaabbff, 0.35, 18); l.position.set(...p); scene.add(l);
+});
+
+// 部屋 (4面の壁をそれぞれ違う色に)
+function floorTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+    g.fillStyle = (x + y) % 2 ? '#2a2f45' : '#20243a'; g.fillRect(x * 32, y * 32, 32, 32);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(5, 5);
+  return t;
+}
+const mat = c => new THREE.MeshStandardMaterial({ color: c, side: THREE.BackSide, roughness: .9 });
+// BoxGeometry面順: +x(東), -x(西), +y(天井), -y(床), +z(南), -z(北)
+const roomMats = [
+  mat(0x4a3a5c), mat(0x3a5c4a), mat(0x1c2030),
+  new THREE.MeshStandardMaterial({ map: floorTexture(), side: THREE.BackSide }),
+  mat(0x5c4a3a), mat(0x3a4a5c),
+];
+const roomMesh = new THREE.Mesh(new THREE.BoxGeometry(ROOM * 2, 6, ROOM * 2), roomMats);
+roomMesh.position.y = 3; scene.add(roomMesh);
+
+// 壁の方角プレート
+function textTexture(text, w, h, font, color = '#fff', bg = null) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  if (bg) { g.fillStyle = bg; g.fillRect(0, 0, w, h); }
+  g.fillStyle = color; g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, w / 2, h / 2 + 4);
+  const t = new THREE.CanvasTexture(c); return { t, c, g };
+}
+const WALL_N = [[0, 0, 1], [-1, 0, 0], [0, 0, -1], [1, 0, 0]];   // 各壁の内向き法線
+const WALL_ROT = [0, -Math.PI / 2, Math.PI, Math.PI / 2];
+for (let w = 0; w < 4; w++) {
+  const n = WALL_N[w];
+  const { t } = textTexture(WALL_NAMES[w], 256, 256, 'bold 190px sans-serif', '#ffffffcc');
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6),
+    new THREE.MeshBasicMaterial({ map: t, transparent: true }));
+  m.position.set(-n[0] * (ROOM - 0.02), 5.1, -n[2] * (ROOM - 0.02));
+  m.rotation.y = WALL_ROT[w];
+  scene.add(m);
+}
+
+// ---------- ボタン ----------
+const btns = [];
+const btnMeshes = [];
+for (let i = 0; i < N_BTN; i++) {
+  const w = Math.floor(i / 8), k = i % 8, c = k % 4, r = Math.floor(k / 4);
+  const n = WALL_N[w];
+  const g = new THREE.Group();
+  g.position.set(-n[0] * ROOM, 0, -n[2] * ROOM);
+  g.rotation.y = WALL_ROT[w];
+  g.translateX(-6 + c * 4);                // 壁を正面から見て左→右
+  g.position.y = 1.7 + r * 2.3;
+
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 0.15),
+    new THREE.MeshStandardMaterial({ color: 0x15171f, roughness: .5, metalness: .4 }));
+  plate.position.z = 0.075; g.add(plate);
+
+  const col = new THREE.Color().setHSL(((i * 37) % 360) / 360, 0.85, 0.5);
+  const cg = new THREE.CylinderGeometry(0.5, 0.5, 0.3, 28); cg.rotateX(Math.PI / 2);
+  const bm = new THREE.Mesh(cg, new THREE.MeshStandardMaterial({
+    color: col, emissive: col, emissiveIntensity: 0.35, roughness: .3 }));
+  bm.position.z = 0.3; bm.userData.id = i; g.add(bm);
+
+  const lab = textTexture(String(i + 1), 256, 100, 'bold 70px sans-serif', '#fff', '#111');
+  const lm = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.43), new THREE.MeshBasicMaterial({ map: lab.t }));
+  lm.position.set(0, -1.05, 0.02); g.add(lm);
+
+  scene.add(g);
+  btns.push({ i, mesh: bm, lab, color: col, pressed: false });
+  btnMeshes.push(bm);
+}
+function drawLabel(b, mark) {
+  const { g, c, t } = b.lab;
+  g.fillStyle = '#111'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#fff'; g.font = 'bold 70px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(mark ? `${b.i + 1} ${mark}` : String(b.i + 1), c.width / 2, c.height / 2 + 4);
+  t.needsUpdate = true;
+}
+function resetButtons() {
+  btns.forEach(b => {
+    b.pressed = false;
+    b.mesh.material.color.copy(b.color); b.mesh.material.emissive.copy(b.color);
+    b.mesh.material.emissiveIntensity = 0.35;
+    b.mesh.scale.z = 1; b.mesh.position.z = 0.3;
+    drawLabel(b, '');
+  });
+}
+function pressVisual(id, mark, isExit) {
+  const b = btns[id]; b.pressed = true;
+  b.mesh.scale.z = 0.4; b.mesh.position.z = 0.21;
+  if (isExit) { b.mesh.material.color.set(0x44ff88); b.mesh.material.emissive.set(0x22ff66); b.mesh.material.emissiveIntensity = 1.2; }
+  else { b.mesh.material.color.set(0x555a66); b.mesh.material.emissive.set(0x000000); }
+  drawLabel(b, mark);
+}
+
+// ---------- アバター ----------
+function makeAvatar(name, slot) {
+  const col = SLOT_COLORS[slot % 5];
+  const g = new THREE.Group();
+  const m = new THREE.MeshStandardMaterial({ color: col, roughness: .6 });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.38, 1.1, 14), m); body.position.y = 0.65; g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 16, 12), m); head.position.y = 1.42; g.add(head);
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.1, 0.18), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+  nose.position.set(0, 1.45, -0.3); g.add(nose);
+  const lab = textTexture(name, 512, 96, 'bold 52px sans-serif', col, '#000a');
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: lab.t, depthTest: false }));
+  sp.scale.set(1.6, 0.3, 1); sp.position.y = 2.0; sp.renderOrder = 10; g.add(sp);
+  scene.add(g);
+  return g;
+}
+function syncAvatars() {
+  const ids = new Set(lobbyPlayers.map(p => p.id));
+  for (const [id, a] of avatars) if (!ids.has(id)) { scene.remove(a.g); avatars.delete(id); }
+  lobbyPlayers.forEach(p => {
+    if (p.id === myId || avatars.has(p.id)) return;
+    avatars.set(p.id, { g: makeAvatar(p.name, p.slot), tx: 0, tz: 0, try: 0 });
+  });
+  const vis = phase === 'playing' || phase === 'ended';
+  avatars.forEach(a => a.g.visible = vis);
+}
+
+// ---------- 通信 ----------
+const send = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+function connect() {
+  const name = $('name').value.trim(), room = $('room').value.trim();
+  $('menuMsg').textContent = '接続中…';
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  ws.onopen = () => send({ t: 'join', name, room });
+  ws.onmessage = e => handle(JSON.parse(e.data));
+  ws.onclose = () => { if (phase !== 'menu') backToMenu('接続が切れました'); else $('menuMsg').textContent = '接続できませんでした'; };
+}
+function backToMenu(msg) {
+  phase = 'menu'; myId = null;
+  document.exitPointerLock && document.exitPointerLock();
+  ['lobby', 'hud', 'lock', 'end'].forEach(id => $(id).style.display = 'none');
+  $('menu').style.display = 'flex'; $('menuMsg').textContent = msg || '';
+  avatars.forEach(a => scene.remove(a.g)); avatars.clear();
+}
+
+function handle(m) {
+  switch (m.t) {
+    case 'error': $('menuMsg').textContent = m.msg; ws.onclose = null; ws.close(); break;
+    case 'joined': myId = m.id; break;
+    case 'lobby': onLobby(m); break;
+    case 'start': onStart(m); break;
+    case 'players':
+      m.list.forEach(p => { const a = avatars.get(p.id); if (a) { a.tx = p.x; a.tz = p.z; a.try = p.ry; } });
+      break;
+    case 'pressed': onPressed(m); break;
+    case 'left': log(`${m.name} が退室した`); break;
+    case 'end': onEnd(m); break;
+  }
+}
+
+function onLobby(m) {
+  lobbyPlayers = m.players; hostId = m.host;
+  if (phase === 'menu' || phase === 'ended' || phase === 'lobby') {
+    phase = 'lobby';
+    document.exitPointerLock && document.exitPointerLock();
+    ['menu', 'hud', 'lock', 'end'].forEach(id => $(id).style.display = 'none');
+    $('lobby').style.display = 'flex';
+    $('lobbyCode').textContent = m.room;
+    const ul = $('plist'); ul.innerHTML = '';
+    m.players.forEach(p => {
+      const li = document.createElement('li');
+      const d = document.createElement('span'); d.className = 'dot'; d.style.background = SLOT_COLORS[p.slot % 5];
+      const s = document.createElement('span'); s.textContent = p.name + (p.id === myId ? ' (あなた)' : '') + (p.id === hostId ? ' 👑' : '');
+      li.append(d, s); ul.appendChild(li);
+    });
+    const isHost = myId === hostId;
+    $('startBtn').style.display = isHost ? 'block' : 'none';
+    $('waitMsg').textContent = isHost ? `${m.players.length}/5人 参加中` : 'ホストの開始を待っています…';
+  }
+  syncAvatars();
+  renderHudPlayers();
+}
+
+function renderHudPlayers() {
+  const box = $('hudPlayers'); box.innerHTML = '';
+  lobbyPlayers.forEach(p => {
+    const d = document.createElement('div');
+    d.style.color = SLOT_COLORS[p.slot % 5];
+    d.textContent = '● ' + p.name + (p.id === myId ? ' (you)' : '');
+    box.appendChild(d);
+  });
+}
+
+function onStart(m) {
+  phase = 'playing';
+  resetButtons();
+  const s = m.spawns[myId] || [0, 0];
+  me.x = s[0]; me.z = s[1]; yaw = 0; pitch = 0;
+  frozenUntil = 0; darkUntil = 0; $('dark').style.opacity = 0; $('status').textContent = '';
+  endAt = Date.now() + m.remain;
+  $('log').innerHTML = ''; $('hints').textContent = 'まだありません';
+  $('lobby').style.display = 'none'; $('end').style.display = 'none';
+  $('hud').style.display = 'block'; $('lock').style.display = 'flex';
+  syncAvatars(); renderHudPlayers();
+  avatars.forEach((a, id) => { const sp = m.spawns[id]; if (sp) { a.tx = sp[0]; a.tz = sp[1]; a.g.position.set(sp[0], 0, sp[1]); } });
+  toast('出口ボタンはたった1つ! 先に押した人の勝ち', 3500);
+}
+
+let firstHint = true;
+function onPressed(m) {
+  const isExit = m.type === 'exit';
+  pressVisual(m.id, MARK[m.type] || '', isExit);
+  beep(isExit ? 880 : m.type === 'none' ? 220 : 440, 0.15);
+  const who = m.by === myId ? 'あなた' : m.name;
+  log(`${who}:${m.id + 1}番 → ${MARK[m.type]} ${m.type === 'hint' ? 'ヒント' : m.text}`);
+  if (m.type === 'hint') {
+    if (firstHint) { $('hints').innerHTML = ''; firstHint = false; }
+    const d = document.createElement('div'); d.textContent = `・${m.text}(${m.id + 1}番)`; $('hints').appendChild(d);
+    toast('💡 ' + m.text, 4500);
+  } else if (m.by === myId) toast(m.text, 3000);
+  if (m.by === myId) {
+    if (m.type === 'freeze') frozenUntil = Date.now() + m.dur;
+    if (m.type === 'dark') { darkUntil = Date.now() + m.dur; $('dark').style.opacity = 0.97; }
+    if (m.type === 'warp' && m.to) { me.x = m.to[0]; me.z = m.to[1]; }
+  }
+}
+// 新規ゲームでヒント欄初期化
+const _onStart = onStart; onStart = function (m) { firstHint = true; _onStart(m); };
+
+function onEnd(m) {
+  phase = 'ended';
+  document.exitPointerLock && document.exitPointerLock();
+  $('lock').style.display = 'none';
+  if (m.exitId >= 0 && !btns[m.exitId].pressed) pressVisual(m.exitId, MARK.exit, true);
+  const win = m.winner;
+  if (win) {
+    $('endTitle').textContent = win.id === myId ? '🎉 脱出成功!!' : `🚪 ${win.name} が脱出!`;
+    $('endSub').textContent = `出口は ${WALL_NAMES[Math.floor(m.exitId / 8)]}の壁の ${m.exitId + 1}番 でした`;
+  } else {
+    $('endTitle').textContent = '⏰ 時間切れ… 全員ゲームオーバー';
+    $('endSub').textContent = `出口は ${WALL_NAMES[Math.floor(m.exitId / 8)]}の壁の ${m.exitId + 1}番 でした`;
+  }
+  $('againBtn').style.display = myId === hostId ? 'block' : 'none';
+  if (myId !== hostId) $('endSub').textContent += '\nホストが次のゲームを始めるのを待っています…';
+  $('end').style.display = 'flex';
+}
+
+// ---------- UI ----------
+function log(t) {
+  const d = document.createElement('div'); d.textContent = t; $('log').appendChild(d);
+  while ($('log').children.length > 7) $('log').removeChild($('log').firstChild);
+}
+let toastTimer = null;
+function toast(t, ms = 2500) {
+  const el = $('toast'); el.textContent = t; el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+let actx = null;
+function beep(f, d) {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.frequency.value = f; o.type = 'square'; g.gain.value = 0.05;
+    o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime + d);
+  } catch (e) {}
+}
+
+$('joinBtn').onclick = connect;
+$('name').addEventListener('keydown', e => e.key === 'Enter' && connect());
+$('room').addEventListener('keydown', e => e.key === 'Enter' && connect());
+$('startBtn').onclick = () => send({ t: 'start' });
+$('againBtn').onclick = () => send({ t: 'again' });
+$('lock').onclick = () => $('c').requestPointerLock();
+$('c').onclick = () => { if (phase === 'playing' && !locked) $('c').requestPointerLock(); };
+
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === $('c');
+  if (phase === 'playing') $('lock').style.display = locked ? 'none' : 'flex';
+});
+addEventListener('mousemove', e => {
+  if (!locked) return;
+  yaw -= e.movementX * 0.0022;
+  pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0022));
+});
+addEventListener('keydown', e => { keys[e.code] = true; });
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ボタン押下
+const ray = new THREE.Raycaster();
+function lookedButton() {
+  ray.setFromCamera({ x: 0, y: 0 }, camera);
+  const hit = ray.intersectObjects(btnMeshes)[0];
+  if (hit && hit.distance < 6) return hit.object.userData.id;
+  return -1;
+}
+addEventListener('mousedown', e => {
+  if (!locked || phase !== 'playing' || e.button !== 0) return;
+  if (Date.now() < frozenUntil || Date.now() < darkUntil && false) return;
+  const id = lookedButton();
+  if (id >= 0 && !btns[id].pressed) send({ t: 'press', id });
+});
+
+// ---------- メインループ ----------
+let last = performance.now(), sendAcc = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const t = Date.now();
+
+  if (phase === 'playing') {
+    const frozen = t < frozenUntil;
+    if (locked && !frozen) {
+      const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
+      const s = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+      if (f || s) {
+        const len = Math.hypot(f, s), sp = (keys.ShiftLeft ? 8 : 5) * dt;
+        me.x += (-Math.sin(yaw) * f + Math.cos(yaw) * s) / len * sp;
+        me.z += (-Math.cos(yaw) * f - Math.sin(yaw) * s) / len * sp;
+        me.x = Math.max(-9.4, Math.min(9.4, me.x));
+        me.z = Math.max(-9.4, Math.min(9.4, me.z));
+      }
+    }
+    // 状態表示
+    if (frozen) $('status').textContent = `❄ 凍結中 ${Math.ceil((frozenUntil - t) / 1000)}`;
+    else if (t < darkUntil) $('status').textContent = `🌑 暗闇 ${Math.ceil((darkUntil - t) / 1000)}`;
+    else { $('status').textContent = ''; if ($('dark').style.opacity !== '0') $('dark').style.opacity = 0; }
+
+    // タイマー
+    const rem = Math.max(0, endAt - t), sec = Math.ceil(rem / 1000);
+    $('timer').textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+    $('timer').classList.toggle('low', sec <= 30);
+
+    // 狙っているボタン
+    const id = locked ? lookedButton() : -1;
+    const pr = $('prompt');
+    if (id >= 0) {
+      pr.style.display = 'block';
+      pr.textContent = btns[id].pressed ? `${id + 1}番(押し済み)` : `クリックで ${id + 1}番 を押す`;
+    } else pr.style.display = 'none';
+
+    // 位置送信
+    sendAcc += dt;
+    if (sendAcc > 0.066) { sendAcc = 0; send({ t: 'move', x: me.x, z: me.z, ry: yaw }); }
+  }
+
+  camera.position.set(me.x, 1.7, me.z);
+  camera.rotation.set(pitch, yaw, 0);
+
+  avatars.forEach(a => {
+    a.g.position.x += (a.tx - a.g.position.x) * Math.min(1, dt * 12);
+    a.g.position.z += (a.tz - a.g.position.z) * Math.min(1, dt * 12);
+    a.g.rotation.y = a.try;
+  });
+
+  // 出口ボタンの脈動(終了後)
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

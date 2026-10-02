@@ -1,0 +1,12 @@
+{
+  "name": "button-room-escape",
+  "version": "1.0.0",
+  "description": "最大5人のオンライン3D脱出ゲーム: ボタンだらけの部屋",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
